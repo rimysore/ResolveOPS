@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { getClient } from "./client";
 
 export type TenantRecord = {
   id: string;
@@ -50,17 +50,21 @@ export type EvaluationRecord = {
   status: string;
 };
 
-function database(): D1Database {
-  if (!env.DB) {
-    throw new Error("ResolveOps requires the Cloudflare D1 `DB` binding.");
+let databaseReady: Promise<void> | null = null;
+
+async function ensureDatabaseReady(): Promise<void> {
+  if (!databaseReady) {
+    databaseReady = initializeDatabase();
   }
-  return env.DB;
+  await databaseReady;
 }
 
-export async function ensureDatabase(): Promise<D1Database> {
-  const db = database();
-  await db.batch([
-    db.prepare(`
+async function initializeDatabase(): Promise<void> {
+  const db = getClient();
+  await db.batch(
+    [
+      {
+        sql: `
       CREATE TABLE IF NOT EXISTS tenants (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -70,8 +74,10 @@ export async function ensureDatabase(): Promise<D1Database> {
         environment TEXT NOT NULL DEFAULT 'sandbox',
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
-    `),
-    db.prepare(`
+    `,
+      },
+      {
+        sql: `
       CREATE TABLE IF NOT EXISTS cases (
         id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
@@ -90,8 +96,10 @@ export async function ensureDatabase(): Promise<D1Database> {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (tenant_id) REFERENCES tenants(id)
       )
-    `),
-    db.prepare(`
+    `,
+      },
+      {
+        sql: `
       CREATE TABLE IF NOT EXISTS case_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         case_id TEXT NOT NULL,
@@ -102,8 +110,10 @@ export async function ensureDatabase(): Promise<D1Database> {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (case_id) REFERENCES cases(id)
       )
-    `),
-    db.prepare(`
+    `,
+      },
+      {
+        sql: `
       CREATE TABLE IF NOT EXISTS evaluations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         release TEXT NOT NULL,
@@ -116,19 +126,22 @@ export async function ensureDatabase(): Promise<D1Database> {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (tenant_id) REFERENCES tenants(id)
       )
-    `),
-    db.prepare(
-      "CREATE INDEX IF NOT EXISTS cases_tenant_idx ON cases(tenant_id)",
-    ),
-    db.prepare(
-      "CREATE INDEX IF NOT EXISTS events_case_idx ON case_events(case_id)",
-    ),
-  ]);
-  await seedDatabase(db);
-  return db;
+    `,
+      },
+      {
+        sql: "CREATE INDEX IF NOT EXISTS cases_tenant_idx ON cases(tenant_id)",
+      },
+      {
+        sql: "CREATE INDEX IF NOT EXISTS events_case_idx ON case_events(case_id)",
+      },
+    ],
+    "write",
+  );
+  await seedDatabase();
 }
 
-async function seedDatabase(db: D1Database): Promise<void> {
+async function seedDatabase(): Promise<void> {
+  const db = getClient();
   const tenants = [
     [
       "iu-facilities",
@@ -156,14 +169,12 @@ async function seedDatabase(db: D1Database): Promise<void> {
     ],
   ] as const;
   for (const tenant of tenants) {
-    await db
-      .prepare(
-        `INSERT OR IGNORE INTO tenants
+    await db.execute({
+      sql: `INSERT OR IGNORE INTO tenants
           (id, name, industry, policy_summary, approval_threshold, environment)
          VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(...tenant)
-      .run();
+      args: [...tenant],
+    });
   }
 
   const cases = [
@@ -237,22 +248,20 @@ async function seedDatabase(db: D1Database): Promise<void> {
     ],
   ] as const;
   for (const item of cases) {
-    await db
-      .prepare(
-        `INSERT OR IGNORE INTO cases
+    await db.execute({
+      sql: `INSERT OR IGNORE INTO cases
           (id, tenant_id, external_id, title, description, asset_name, location,
            priority, status, risk_score, recommendation, rationale,
            estimated_cost, confidence, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(...item)
-      .run();
+      args: [...item],
+    });
   }
 
-  const eventCount = await db
-    .prepare("SELECT COUNT(*) AS count FROM case_events")
-    .first<{ count: number }>();
-  if ((eventCount?.count ?? 0) === 0) {
+  const eventCount = await db.execute({
+    sql: "SELECT COUNT(*) AS count FROM case_events",
+  });
+  if (Number(eventCount.rows[0]?.count ?? 0) === 0) {
     const events = [
       ["case-1042", "ingest", "Request normalized", "complete", "Mapped AiM export to canonical work-order schema", "2026-07-25T13:42:01Z"],
       ["case-1042", "retrieve", "Asset history retrieved", "complete", "4 repairs · 14 years old · warranty expired", "2026-07-25T13:42:02Z"],
@@ -266,21 +275,19 @@ async function seedDatabase(db: D1Database): Promise<void> {
       ["case-1039", "verify", "Inspection created", "complete", "External work-order ID WO-88402 reconciled", "2026-07-25T12:56:10Z"],
     ] as const;
     for (const event of events) {
-      await db
-        .prepare(
-          `INSERT INTO case_events
+      await db.execute({
+        sql: `INSERT INTO case_events
             (case_id, stage, label, status, detail, created_at)
            VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(...event)
-        .run();
+        args: [...event],
+      });
     }
   }
 
-  const evalCount = await db
-    .prepare("SELECT COUNT(*) AS count FROM evaluations")
-    .first<{ count: number }>();
-  if ((evalCount?.count ?? 0) === 0) {
+  const evalCount = await db.execute({
+    sql: "SELECT COUNT(*) AS count FROM evaluations",
+  });
+  if (Number(evalCount.rows[0]?.count ?? 0) === 0) {
     const evaluations = [
       ["v0.9.4", "iu-facilities", 0.94, 1, 3.8, 0.118, "promote"],
       ["v0.9.4", "meridian-health", 0.91, 1, 4.4, 0.143, "promote"],
@@ -290,100 +297,112 @@ async function seedDatabase(db: D1Database): Promise<void> {
       ["candidate-v0.10", "northstar-mfg", 0.93, 0.98, 3.7, 0.125, "pass"],
     ] as const;
     for (const evaluation of evaluations) {
-      await db
-        .prepare(
-          `INSERT INTO evaluations
+      await db.execute({
+        sql: `INSERT INTO evaluations
             (release, tenant_id, task_completion, policy_compliance,
              p95_latency, cost_per_case, status)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(...evaluation)
-        .run();
+        args: [...evaluation],
+      });
     }
   }
 }
 
 export async function getOverview() {
-  const db = await ensureDatabase();
+  await ensureDatabaseReady();
+  const db = getClient();
   const [tenants, cases, events, evaluations] = await Promise.all([
-    db.prepare("SELECT * FROM tenants ORDER BY name").all<TenantRecord>(),
-    db
-      .prepare(
-        `SELECT cases.*, tenants.name AS tenant_name
+    db.execute("SELECT * FROM tenants ORDER BY name"),
+    db.execute(
+      `SELECT cases.*, tenants.name AS tenant_name
          FROM cases JOIN tenants ON tenants.id = cases.tenant_id
          ORDER BY cases.created_at DESC`,
-      )
-      .all<CaseRecord>(),
-    db
-      .prepare("SELECT * FROM case_events ORDER BY created_at ASC")
-      .all<EventRecord>(),
-    db
-      .prepare(
-        `SELECT evaluations.*, tenants.name AS tenant_name
+    ),
+    db.execute("SELECT * FROM case_events ORDER BY created_at ASC"),
+    db.execute(
+      `SELECT evaluations.*, tenants.name AS tenant_name
          FROM evaluations JOIN tenants ON tenants.id = evaluations.tenant_id
          ORDER BY evaluations.id ASC`,
-      )
-      .all<EvaluationRecord>(),
+    ),
   ]);
 
+  const tenantRows = tenants.rows as unknown as TenantRecord[];
+  const caseRows = cases.rows as unknown as CaseRecord[];
+  const eventRows = events.rows as unknown as EventRecord[];
+  const evaluationRows = evaluations.rows as unknown as EvaluationRecord[];
+
   return {
-    tenants: tenants.results,
-    cases: cases.results.map((item) => ({
+    tenants: tenantRows,
+    cases: caseRows.map((item) => ({
       ...item,
-      events: events.results.filter((event) => event.case_id === item.id),
+      events: eventRows.filter((event) => event.case_id === item.id),
     })),
-    evaluations: evaluations.results,
+    evaluations: evaluationRows,
   };
 }
 
 export async function approveCase(id: string, reviewer: string) {
-  const db = await ensureDatabase();
-  const current = await db
-    .prepare("SELECT id, status FROM cases WHERE id = ?")
-    .bind(id)
-    .first<{ id: string; status: string }>();
-  if (!current) return null;
-  if (current.status !== "pending_approval") {
-    return { id, status: current.status, changed: false };
+  await ensureDatabaseReady();
+  const db = getClient();
+  const current = await db.execute({
+    sql: "SELECT id, status FROM cases WHERE id = ?",
+    args: [id],
+  });
+  const row = current.rows[0] as unknown as
+    | { id: string; status: string }
+    | undefined;
+  if (!row) return null;
+  if (row.status !== "pending_approval") {
+    return { id, status: row.status, changed: false };
   }
 
-  await db.batch([
-    db
-      .prepare("UPDATE cases SET status = 'approved' WHERE id = ?")
-      .bind(id),
-    db
-      .prepare(
-        `INSERT INTO case_events
+  await db.batch(
+    [
+      {
+        sql: "UPDATE cases SET status = 'approved' WHERE id = ?",
+        args: [id],
+      },
+      {
+        sql: `INSERT INTO case_events
           (case_id, stage, label, status, detail)
          VALUES (?, 'approval', 'Action approved', 'complete', ?)`,
-      )
-      .bind(id, `${reviewer} approved the bounded action`),
-  ]);
+        args: [id, `${reviewer} approved the bounded action`],
+      },
+    ],
+    "write",
+  );
   return { id, status: "approved", changed: true };
 }
 
 export async function requestCaseChanges(id: string, reviewer: string) {
-  const db = await ensureDatabase();
-  const current = await db
-    .prepare("SELECT id, status FROM cases WHERE id = ?")
-    .bind(id)
-    .first<{ id: string; status: string }>();
-  if (!current) return null;
-  if (current.status !== "pending_approval") {
-    return { id, status: current.status, changed: false };
+  await ensureDatabaseReady();
+  const db = getClient();
+  const current = await db.execute({
+    sql: "SELECT id, status FROM cases WHERE id = ?",
+    args: [id],
+  });
+  const row = current.rows[0] as unknown as
+    | { id: string; status: string }
+    | undefined;
+  if (!row) return null;
+  if (row.status !== "pending_approval") {
+    return { id, status: row.status, changed: false };
   }
 
-  await db.batch([
-    db
-      .prepare("UPDATE cases SET status = 'investigating' WHERE id = ?")
-      .bind(id),
-    db
-      .prepare(
-        `INSERT INTO case_events
+  await db.batch(
+    [
+      {
+        sql: "UPDATE cases SET status = 'investigating' WHERE id = ?",
+        args: [id],
+      },
+      {
+        sql: `INSERT INTO case_events
           (case_id, stage, label, status, detail)
          VALUES (?, 'approval', 'Changes requested', 'needs_review', ?)`,
-      )
-      .bind(id, `${reviewer} returned the plan for revision`),
-  ]);
+        args: [id, `${reviewer} returned the plan for revision`],
+      },
+    ],
+    "write",
+  );
   return { id, status: "investigating", changed: true };
 }
