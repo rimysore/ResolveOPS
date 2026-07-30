@@ -29,7 +29,7 @@ test("removes all starter-only assets", async () => {
 
 test("build output contains the product routes", async () => {
   await Promise.all([
-    access(new URL("dist/server/index.js", root)),
+    access(new URL(".next/BUILD_ID", root)),
     access(new URL("app/api/overview/route.ts", root)),
     access(new URL("app/api/cases/[id]/approve/route.ts", root)),
     access(new URL("lib/trace-diff.ts", root)),
