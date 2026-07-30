@@ -17,6 +17,7 @@ decisions.
 - Human approval that updates the audit trail
 - Per-customer release evaluation table
 - A deliberately blocked release despite improved aggregate quality
+- Privacy-safe per-step trace fingerprints and first-divergence detection
 - Python policy engine with deterministic safety boundaries
 - Golden evaluation cases including prompt injection and missing assets
 - Responsive TypeScript control plane
@@ -77,6 +78,8 @@ uvicorn resolveops.api:app --reload --port 8000
 ```bash
 npm run lint
 npm run test:web
+npm run test:trace
+npm run benchmark:trace
 python3 -m pytest services/api/tests
 ```
 
@@ -86,4 +89,3 @@ The MVP does not pretend to execute real maintenance actions. Its tenant,
 asset, and outcome data are seeded simulations. The next milestone is a
 connector SDK, signed webhooks, idempotent external writes, and design-partner
 validation with facilities operators.
-

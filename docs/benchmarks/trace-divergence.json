@@ -1,0 +1,22 @@
+{
+  "benchmark": "trace-divergence-v1",
+  "recorded_at": "2026-07-30",
+  "runtime": "Node.js v23.10.0",
+  "iterations": 30000,
+  "positive_cases": 25000,
+  "structured_trace": {
+    "detection_recall": 1,
+    "classification_accuracy": 1,
+    "false_positive_rate": 0
+  },
+  "outcome_only_baseline": {
+    "detection_recall": 0,
+    "note": "All mutated runs deliberately retain the same final status."
+  },
+  "performance": {
+    "total_ms": 1574.7,
+    "comparisons_per_second": 19051,
+    "mean_microseconds_per_comparison": 52.49
+  },
+  "scope": "Synthetic deterministic mutations across tool, input, output, state, and missing-step branches; this does not measure semantic model quality."
+}

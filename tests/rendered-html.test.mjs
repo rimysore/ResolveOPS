@@ -15,6 +15,8 @@ test("ships the ResolveOps product shell and metadata", async () => {
   assert.match(layout, /ResolveOps — AI operations you can verify/);
   assert.match(dashboard, /Outcome control/);
   assert.match(dashboard, /Release evidence/);
+  assert.match(dashboard, /STRUCTURED TRACE DIFF/);
+  assert.match(dashboard, /Same outcome. Different execution path/);
   assert.match(dashboard, /Approve bounded action/);
   assert.doesNotMatch(page + layout + dashboard, /codex-preview|site is taking shape/i);
 });
@@ -30,6 +32,6 @@ test("build output contains the product routes", async () => {
     access(new URL("dist/server/index.js", root)),
     access(new URL("app/api/overview/route.ts", root)),
     access(new URL("app/api/cases/[id]/approve/route.ts", root)),
+    access(new URL("lib/trace-diff.ts", root)),
   ]);
 });
-

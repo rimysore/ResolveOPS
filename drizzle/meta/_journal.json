@@ -8,6 +8,13 @@
       "when": 1785019954712,
       "tag": "0000_faulty_kingpin",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785443990180,
+      "tag": "0001_graceful_blazing_skull",
+      "breakpoints": true
     }
   ]
 }

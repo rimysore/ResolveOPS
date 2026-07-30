@@ -56,3 +56,33 @@ export const evaluations = sqliteTable("evaluations", {
   status: text("status").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const traceRuns = sqliteTable("trace_runs", {
+  id: text("id").primaryKey(),
+  caseId: text("case_id")
+    .notNull()
+    .references(() => cases.id),
+  tenantId: text("tenant_id")
+    .notNull()
+    .references(() => tenants.id),
+  label: text("label").notNull(),
+  workflowVersion: text("workflow_version").notNull(),
+  policyVersion: text("policy_version").notNull(),
+  release: text("release").notNull(),
+  finalStatus: text("final_status").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const traceSteps = sqliteTable("trace_steps", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id")
+    .notNull()
+    .references(() => traceRuns.id),
+  stepIndex: integer("step_index").notNull(),
+  stage: text("stage").notNull(),
+  toolCalled: text("tool_called").notNull(),
+  inputFingerprint: text("input_fingerprint").notNull(),
+  outputFingerprint: text("output_fingerprint").notNull(),
+  status: text("status").notNull(),
+  durationMs: integer("duration_ms").notNull(),
+});

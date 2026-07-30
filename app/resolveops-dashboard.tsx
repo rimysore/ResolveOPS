@@ -52,10 +52,52 @@ type EvaluationRecord = {
   status: string;
 };
 
+type TraceStepFingerprint = {
+  stepIndex: number;
+  stage: string;
+  toolCalled: string;
+  inputFingerprint: string;
+  outputFingerprint: string;
+  status: string;
+  durationMs: number;
+};
+
+type TraceRun = {
+  id: string;
+  label: string;
+  tenantId: string;
+  workflowVersion: string;
+  policyVersion: string;
+  release: string;
+  finalStatus: string;
+  steps: TraceStepFingerprint[];
+};
+
+type TraceDivergence = {
+  stepIndex: number;
+  kind: string;
+  severity: string;
+  baseline: string;
+  candidate: string;
+  explanation: string;
+};
+
+type TraceComparison = {
+  baseline: TraceRun;
+  candidate: TraceRun;
+  firstDivergence: TraceDivergence | null;
+  divergences: TraceDivergence[];
+  matchedSteps: number;
+  totalSteps: number;
+  downstreamStepsAffected: number;
+  outcomeOnlyWouldMiss: boolean;
+};
+
 type Overview = {
   tenants: TenantRecord[];
   cases: CaseRecord[];
   evaluations: EvaluationRecord[];
+  traceComparison: TraceComparison;
 };
 
 type View = "operations" | "release" | "tenants";
@@ -399,6 +441,7 @@ export function ResolveOpsDashboard() {
         {view === "release" ? (
           <ReleaseGate
             evaluations={overview.evaluations}
+            traceComparison={overview.traceComparison}
             ran={gateRan}
             onRun={() => setGateRan(true)}
           />
@@ -535,10 +578,12 @@ function CaseDetail({
 
 function ReleaseGate({
   evaluations,
+  traceComparison,
   ran,
   onRun,
 }: {
   evaluations: EvaluationRecord[];
+  traceComparison: TraceComparison;
   ran: boolean;
   onRun: () => void;
 }) {
@@ -573,6 +618,8 @@ function ReleaseGate({
         </div>
         <code>88% &lt; 98% floor</code>
       </div>
+
+      <TraceDiffPanel comparison={traceComparison} />
 
       <div className="panel evaluation-panel">
         <div className="panel-header">
@@ -642,6 +689,154 @@ function ReleaseGate({
         </article>
       </div>
     </section>
+  );
+}
+
+const divergenceLabels: Record<string, string> = {
+  missing_step: "Step shape changed",
+  tool_branch: "Tool branch changed",
+  input_change: "Input changed",
+  output_change: "Tool output changed",
+  state_transition: "State changed",
+};
+
+function shortFingerprint(value: string) {
+  return `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
+function TraceDiffPanel({ comparison }: { comparison: TraceComparison }) {
+  const first = comparison.firstDivergence;
+  const baselineByStep = new Map(
+    comparison.baseline.steps.map((step) => [step.stepIndex, step]),
+  );
+  const candidateByStep = new Map(
+    comparison.candidate.steps.map((step) => [step.stepIndex, step]),
+  );
+
+  return (
+    <section className="panel trace-diff-panel">
+      <div className="trace-diff-heading">
+        <div>
+          <p className="eyebrow">STRUCTURED TRACE DIFF</p>
+          <h2>Same outcome. Different execution path.</h2>
+          <p>
+            Outcome-only evaluation sees two pending approvals. Step fingerprints
+            expose the candidate taking an unexpected reconciliation branch first.
+          </p>
+        </div>
+        <div className="divergence-verdict">
+          <small>FIRST DIVERGENCE</small>
+          <strong>
+            {first
+              ? `Step ${String(first.stepIndex + 1).padStart(2, "0")} · ${
+                  divergenceLabels[first.kind] ?? first.kind
+                }`
+              : "No divergence"}
+          </strong>
+          <span>{first?.explanation ?? "Runs match step for step."}</span>
+        </div>
+      </div>
+
+      <div className="trace-proof-grid">
+        <article>
+          <small>OUTCOME-ONLY CHECK</small>
+          <strong className="missed">
+            {comparison.outcomeOnlyWouldMiss ? "Missed" : "Detected"}
+          </strong>
+          <span>
+            Both runs ended {comparison.baseline.finalStatus.replaceAll("_", " ")}
+          </span>
+        </article>
+        <article>
+          <small>STEP FINGERPRINT CHECK</small>
+          <strong className="detected">
+            {first ? `Detected at step ${first.stepIndex + 1}` : "No change"}
+          </strong>
+          <span>{comparison.downstreamStepsAffected} downstream steps affected</span>
+        </article>
+        <article>
+          <small>PAYLOAD HANDLING</small>
+          <strong>HMAC-SHA256</strong>
+          <span>Inputs and outputs are fingerprinted, not stored</span>
+        </article>
+      </div>
+
+      <div className="run-version-row">
+        <div>
+          <span className="run-dot baseline" />
+          <strong>{comparison.baseline.label}</strong>
+          <code>{comparison.baseline.workflowVersion}</code>
+        </div>
+        <div>
+          <span className="run-dot candidate" />
+          <strong>{comparison.candidate.label}</strong>
+          <code>{comparison.candidate.workflowVersion}</code>
+        </div>
+        <span>Policy {comparison.candidate.policyVersion}</span>
+      </div>
+
+      <div className="trace-step-list">
+        {Array.from({ length: comparison.totalSteps }, (_, stepIndex) => {
+          const expected = baselineByStep.get(stepIndex);
+          const actual = candidateByStep.get(stepIndex);
+          const rowDivergence = comparison.divergences.find(
+            (item) => item.stepIndex === stepIndex,
+          );
+          const afterFork =
+            first !== null && stepIndex > first.stepIndex && !rowDivergence;
+          return (
+            <article
+              className={`trace-step-row ${
+                rowDivergence ? "diverged" : afterFork ? "downstream" : "matched"
+              }`}
+              key={stepIndex}
+            >
+              <div className="step-index">
+                <span>{String(stepIndex + 1).padStart(2, "0")}</span>
+                <i />
+              </div>
+              <TraceStepCell label="BASELINE" step={expected} />
+              <div className="step-compare-state">
+                {rowDivergence
+                  ? divergenceLabels[rowDivergence.kind] ?? "Changed"
+                  : afterFork
+                    ? "Shifted after fork"
+                    : "Exact match"}
+              </div>
+              <TraceStepCell label="CANDIDATE" step={actual} />
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function TraceStepCell({
+  label,
+  step,
+}: {
+  label: string;
+  step: TraceStepFingerprint | undefined;
+}) {
+  if (!step) {
+    return (
+      <div className="trace-step-cell empty">
+        <small>{label}</small>
+        <strong>Missing step</strong>
+      </div>
+    );
+  }
+  return (
+    <div className="trace-step-cell">
+      <small>{label} · {step.stage}</small>
+      <strong>{step.toolCalled}</strong>
+      <span>
+        in {shortFingerprint(step.inputFingerprint)} · out{" "}
+        {shortFingerprint(step.outputFingerprint)}
+      </span>
+      <code>{step.durationMs}ms · {step.status}</code>
+    </div>
   );
 }
 
